@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TF Board Filter
 // @namespace    https://tf-staff.github.io/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Tech Foundry: per-user column hiding + column colors for Trello boards
 // @author       Tech Foundry
 // @match        https://trello.com/*
@@ -13,7 +13,9 @@
 // ==/UserScript==
 
 /*
- * TF BOARD FILTER v1.0.0
+ * TF BOARD FILTER v1.1.0
+ * Changelog: stronger tint/outline; panel stays open until Save & close;
+ *            expanded color palettes persist while making multiple changes.
  * ----------------------------------------------------------------------
  * What it does:
  *   1. Hide/show entire lists (columns), per user, per board.
@@ -54,8 +56,9 @@
     { label: 'Gray',    hex: '#8590A2' },
   ];
 
-  const TINT_ALPHA = 0.10;    // background tint strength
-  const RING_ALPHA = 0.60;    // outline strength
+  const TINT_ALPHA = 0.22;    // background tint strength
+  const RING_ALPHA = 0.95;    // outline strength
+  const RING_WIDTH = 3;       // outline thickness in px
 
   // ------------------------------------------------------------------
   // Storage (per board, per browser profile)
@@ -159,7 +162,7 @@
         // background-image layers the tint OVER the list's own dark
         // background without replacing it
         inner.style.backgroundImage = `linear-gradient(${tint}, ${tint})`;
-        inner.style.boxShadow = `inset 0 0 0 2px ${hexToRgba(color, RING_ALPHA)}`;
+        inner.style.boxShadow = `inset 0 0 0 ${RING_WIDTH}px ${hexToRgba(color, RING_ALPHA)}`;
       } else {
         inner.style.backgroundImage = '';
         inner.style.boxShadow = '';
@@ -260,11 +263,16 @@
       font: 600 12px system-ui, sans-serif;
     }
     .tfbf-foot button:hover { background: #3A3B42; }
+    .tfbf-foot button.tfbf-save {
+      flex: 1.4; background: #E6A817; color: #17181C; font-weight: 700;
+    }
+    .tfbf-foot button.tfbf-save:hover { background: #F5BC2F; }
     .tfbf-empty { padding: 16px 14px; color: #8A8C94; }
   `;
 
   let fab = null;
   let panel = null;
+  const openStrips = new Set(); // list names with expanded color palettes
 
   function injectStyles() {
     if (document.getElementById('tfbf-styles')) return;
@@ -303,13 +311,8 @@
     panel = document.createElement('div');
     panel.id = 'tfbf-panel';
     document.body.appendChild(panel);
-
-    // Click outside closes the panel
-    document.addEventListener('click', (e) => {
-      if (!panel.classList.contains('tfbf-open')) return;
-      if (panel.contains(e.target) || fab.contains(e.target)) return;
-      panel.classList.remove('tfbf-open');
-    });
+    // Note: no click-outside close. The panel stays open through any
+    // number of changes and closes only via Save & close (or the fab).
   }
 
   function renderPanel() {
@@ -385,7 +388,7 @@
       panel.appendChild(row);
 
       const strip = document.createElement('div');
-      strip.className = 'tfbf-swatches';
+      strip.className = 'tfbf-swatches' + (openStrips.has(name) ? ' tfbf-open' : '');
 
       PALETTE.forEach((p) => {
         const sw = document.createElement('button');
@@ -415,6 +418,8 @@
       strip.appendChild(none);
 
       dot.addEventListener('click', () => {
+        if (openStrips.has(name)) openStrips.delete(name);
+        else openStrips.add(name);
         strip.classList.toggle('tfbf-open');
       });
       panel.appendChild(strip);
@@ -446,6 +451,15 @@
       renderPanel();
     });
     foot.appendChild(resetColors);
+
+    const saveClose = document.createElement('button');
+    saveClose.className = 'tfbf-save';
+    saveClose.textContent = 'Save & close';
+    saveClose.addEventListener('click', () => {
+      openStrips.clear();
+      panel.classList.remove('tfbf-open');
+    });
+    foot.appendChild(saveClose);
 
     panel.appendChild(foot);
   }
