@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TF Board Filter
 // @namespace    https://tf-staff.github.io/
-// @version      1.2.0
+// @version      1.2.1
 // @description  Tech Foundry: per-user column hiding + column colors for Trello boards
 // @author       Tech Foundry
 // @match        https://trello.com/*
@@ -42,6 +42,8 @@
     'steven': '#4BCE97',   // green
     'valerie': '#9F8FEF',  // purple
     'tristan': '#FEA362',  // orange
+    'hayley': '#E774BB',   // pink
+    'robert': '#F87168',   // red
   };
 
   const PALETTE = [
