@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TF Board Filter
 // @namespace    https://tf-staff.github.io/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Tech Foundry: per-user column hiding + column colors for Trello boards
 // @author       Tech Foundry
 // @match        https://trello.com/*
@@ -13,9 +13,9 @@
 // ==/UserScript==
 
 /*
- * TF BOARD FILTER v1.1.0
- * Changelog: stronger tint/outline; panel stays open until Save & close;
- *            expanded color palettes persist while making multiple changes.
+ * TF BOARD FILTER v1.2.0
+ * Changelog: added per-column Snooze (Zz) — hides a column for 4 hours,
+ *            then it returns automatically. Snoozes survive restarts.
  * ----------------------------------------------------------------------
  * What it does:
  *   1. Hide/show entire lists (columns), per user, per board.
@@ -59,6 +59,7 @@
   const TINT_ALPHA = 0.22;    // background tint strength
   const RING_ALPHA = 0.95;    // outline strength
   const RING_WIDTH = 3;       // outline thickness in px
+  const SNOOZE_MS = 4 * 60 * 60 * 1000;  // snooze duration: 4 hours
 
   // ------------------------------------------------------------------
   // Storage (per board, per browser profile)
@@ -77,10 +78,11 @@
         return {
           hidden: Array.isArray(s.hidden) ? s.hidden : [],
           colors: s.colors && typeof s.colors === 'object' ? s.colors : {},
+          snoozed: s.snoozed && typeof s.snoozed === 'object' ? s.snoozed : {},
         };
       }
     } catch (e) { /* corrupted state — fall through to fresh */ }
-    return { hidden: [], colors: {} };
+    return { hidden: [], colors: {}, snoozed: {} };
   }
 
   function saveState(boardId, state) {
@@ -135,18 +137,34 @@
   // Apply visibility + colors to the board
   // ------------------------------------------------------------------
 
+  function fmtTime(ts) {
+    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
   function applyAll() {
     const boardId = getBoardId();
     if (!boardId) { updateFabBadge(0); return; }
     const state = loadState(boardId);
+    const now = Date.now();
     let hiddenCount = 0;
+
+    // Purge expired snoozes — the column simply returns
+    let expired = false;
+    Object.keys(state.snoozed).forEach((k) => {
+      if (state.snoozed[k] <= now) { delete state.snoozed[k]; expired = true; }
+    });
+    if (expired) {
+      saveState(boardId, state);
+      if (panel && panel.classList.contains('tfbf-open')) renderPanel();
+    }
 
     getListWrappers().forEach((wrapper) => {
       const name = getListName(wrapper);
       if (!name) return; // skip list composer / unnamed elements
 
-      // Visibility
-      if (state.hidden.includes(name)) {
+      // Visibility (permanent hide OR active snooze)
+      const isSnoozed = state.snoozed[name] && state.snoozed[name] > now;
+      if (state.hidden.includes(name) || isSnoozed) {
         wrapper.style.display = 'none';
         hiddenCount++;
       } else if (wrapper.style.display === 'none') {
@@ -218,6 +236,20 @@
       flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .tfbf-name.tfbf-dim { color: #6A6C74; text-decoration: line-through; }
+    .tfbf-until {
+      color: #E6A817; font-size: 11px; text-decoration: none;
+      display: inline-block; margin-left: 2px;
+    }
+    .tfbf-snooze {
+      flex: none; border-radius: 6px; padding: 3px 7px;
+      border: 1px solid #3A3B42; background: transparent; color: #8A8C94;
+      font: 700 10px/1 system-ui, sans-serif; cursor: pointer;
+      transition: border-color .15s ease, color .15s ease;
+    }
+    .tfbf-snooze:hover { border-color: #E6A817; color: #E8E9ED; }
+    .tfbf-snooze.tfbf-zzz {
+      background: #E6A817; border-color: #E6A817; color: #17181C;
+    }
     .tfbf-eye {
       width: 34px; height: 20px; border-radius: 999px; border: none;
       cursor: pointer; position: relative; flex: none;
@@ -350,6 +382,8 @@
       seen.add(name);
 
       const isHidden = state.hidden.includes(name);
+      const snoozeUntil = state.snoozed[name];
+      const isSnoozed = !!(snoozeUntil && snoozeUntil > Date.now());
       const color = colorForList(name, state);
 
       const row = document.createElement('div');
@@ -370,11 +404,37 @@
       });
       row.appendChild(eye);
 
-      // Name
+      // Name (with snooze return time when applicable)
       const label = document.createElement('span');
-      label.className = 'tfbf-name' + (isHidden ? ' tfbf-dim' : '');
+      label.className = 'tfbf-name' + (isHidden || isSnoozed ? ' tfbf-dim' : '');
       label.textContent = name;
+      if (isSnoozed && !isHidden) {
+        const until = document.createElement('span');
+        until.className = 'tfbf-until';
+        until.textContent = ' · back ' + fmtTime(snoozeUntil);
+        label.appendChild(until);
+      }
       row.appendChild(label);
+
+      // Snooze button — hide for 4 hours / wake now
+      const snooze = document.createElement('button');
+      snooze.className = 'tfbf-snooze' + (isSnoozed ? ' tfbf-zzz' : '');
+      snooze.textContent = 'Zz';
+      snooze.title = isSnoozed
+        ? 'Snoozed until ' + fmtTime(snoozeUntil) + ' — click to wake now'
+        : 'Snooze: hide this column for 4 hours';
+      snooze.addEventListener('click', () => {
+        const s = loadState(boardId);
+        if (s.snoozed[name] && s.snoozed[name] > Date.now()) {
+          delete s.snoozed[name]; // wake now
+        } else {
+          s.snoozed[name] = Date.now() + SNOOZE_MS;
+        }
+        saveState(boardId, s);
+        applyAll();
+        renderPanel();
+      });
+      row.appendChild(snooze);
 
       // Color dot → toggles swatch strip
       const dot = document.createElement('button');
@@ -434,6 +494,7 @@
     showAll.addEventListener('click', () => {
       const s = loadState(boardId);
       s.hidden = [];
+      s.snoozed = {};
       saveState(boardId, s);
       applyAll();
       renderPanel();
@@ -483,6 +544,10 @@
     // reacting to our own inline-style changes (attribute mutations).
     const observer = new MutationObserver(scheduleApply);
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // Snooze expiry sweep — brings columns back on time even if the
+    // board is otherwise idle (no mutations, no navigation)
+    setInterval(applyAll, 60 * 1000);
 
     // SPA board switches don't reload the page
     let lastHref = location.href;
