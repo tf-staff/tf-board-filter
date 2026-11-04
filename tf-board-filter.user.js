@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TF Board Filter
 // @namespace    https://tf-staff.github.io/
-// @version      1.2.1
-// @description  Tech Foundry: per-user column hiding + column colors for Trello boards
+// @version      1.3.0
+// @description  Tech Foundry: per-user column hiding, column colors, and wide card view for Trello boards
 // @author       Tech Foundry
 // @match        https://trello.com/*
 // @grant        GM_getValue
@@ -13,13 +13,20 @@
 // ==/UserScript==
 
 /*
- * TF BOARD FILTER v1.2.0
- * Changelog: added per-column Snooze (Zz) — hides a column for 4 hours,
- *            then it returns automatically. Snoozes survive restarts.
+ * TF BOARD FILTER v1.3.0
+ * Changelog:
+ *   1.3.0 — "Wide card view" toggle (Columns panel → Card view). Widens
+ *           the open card to nearly full screen; the description side
+ *           keeps its width and Comments and activity gets the extra
+ *           room. Global per-user setting, off by default.
+ *   1.2.1 — DEFAULT_COLORS roster expanded (Hayley pink, Robert red).
+ *   1.2.0 — per-column Snooze (Zz): hides a column for 4 hours, then it
+ *           returns automatically. Snoozes survive restarts.
  * ----------------------------------------------------------------------
  * What it does:
  *   1. Hide/show entire lists (columns), per user, per board.
  *   2. Apply a faint color tint + outline to lists, per user, per board.
+ *   3. Optional wide card view: more room for Comments and activity.
  *
  * All preferences live in Tampermonkey storage in each person's browser
  * profile — nothing is written to Trello, and no one else's view changes.
@@ -62,6 +69,8 @@
   const RING_ALPHA = 0.95;    // outline strength
   const RING_WIDTH = 3;       // outline thickness in px
   const SNOOZE_MS = 4 * 60 * 60 * 1000;  // snooze duration: 4 hours
+  const WIDE_CARD_MAX = 1800; // wide card view: max card width in px
+  const WIDE_CARD_GUTTER = 48; // wide card view: total side margin in px
 
   // ------------------------------------------------------------------
   // Storage (per board, per browser profile)
@@ -89,6 +98,22 @@
 
   function saveState(boardId, state) {
     GM_setValue('tfbf:' + boardId, JSON.stringify(state));
+  }
+
+  // Global (not per-board) preferences
+  function loadPrefs() {
+    try {
+      const raw = GM_getValue('tfbf:global', null);
+      if (raw) {
+        const p = JSON.parse(raw);
+        return { wideCard: !!p.wideCard };
+      }
+    } catch (e) { /* corrupted — fall through to defaults */ }
+    return { wideCard: false };
+  }
+
+  function savePrefs(prefs) {
+    GM_setValue('tfbf:global', JSON.stringify(prefs));
   }
 
   // ------------------------------------------------------------------
@@ -120,6 +145,88 @@
     );
   }
 
+  // ------------------------------------------------------------------
+  // Card back helpers (wide card view). Trello's card dialog has no
+  // stable test ids for its two columns, so these locate the layout by
+  // the "Comments and activity" heading, falling back to geometry.
+  // Fix card-back selector breakage here and nowhere else.
+  // ------------------------------------------------------------------
+
+  function getCardDialog() {
+    const anchor = document.querySelector(
+      '[data-testid="card-back-name"], [data-testid="card-back-title-input"], ' +
+      '#card-back-name, .card-detail-window'
+    );
+    let dlg = anchor && (anchor.closest('[role="dialog"]') || anchor.closest('.card-detail-window'));
+    if (!dlg && /^\/c\//.test(location.pathname)) {
+      // Card URL but no known anchor: take the largest visible dialog
+      let best = null, bestArea = 0;
+      document.querySelectorAll('[role="dialog"]').forEach((d) => {
+        const r = d.getBoundingClientRect();
+        if (r.width * r.height > bestArea) { bestArea = r.width * r.height; best = d; }
+      });
+      dlg = best;
+    }
+    return dlg || null;
+  }
+
+  // Returns { split, main, comments } — the container holding the two
+  // side-by-side card columns, the left (main) column and the right
+  // (comments/activity) column — or null if the layout isn't found.
+  function findCardColumns(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => /^\s*(comments and activity|activity)\s*$/i.test(n.nodeValue)
+        ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+    });
+    const text = walker.nextNode();
+    if (text && text.parentElement) {
+      const hit = climbToColumns(text.parentElement, root);
+      if (hit) return hit;
+    }
+    // Geometry fallback: first container with two tall side-by-side kids
+    const queue = [root];
+    let visited = 0;
+    while (queue.length && visited < 400) {
+      const el = queue.shift();
+      visited++;
+      const hit = sideBySide(el);
+      if (hit) return hit;
+      queue.push(...el.children);
+    }
+    return null;
+  }
+
+  function climbToColumns(el, root) {
+    let cur = el;
+    while (cur && cur !== document.body) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      const rc = cur.getBoundingClientRect();
+      for (const sib of parent.children) {
+        if (sib === cur) continue;
+        const rs = sib.getBoundingClientRect();
+        if (rs.width > 200 && rs.right <= rc.left + 2 &&
+            rs.bottom > rc.top && rs.top < rc.bottom) {
+          return { split: parent, main: sib, comments: cur };
+        }
+      }
+      if (cur === root) break;
+      cur = parent;
+    }
+    return null;
+  }
+
+  function sideBySide(container) {
+    const kids = Array.from(container.children)
+      .map((k) => ({ k, r: k.getBoundingClientRect() }))
+      .filter((o) => o.r.width > 200 && o.r.height > 150)
+      .sort((a, b) => a.r.left - b.r.left);
+    if (kids.length < 2) return null;
+    const m = kids[kids.length - 2], c = kids[kids.length - 1];
+    if (c.r.left < m.r.right - 2) return null; // stacked, not columns
+    return { split: container, main: m.k, comments: c.k };
+  }
+
   function hexToRgba(hex, alpha) {
     const h = hex.replace('#', '');
     const r = parseInt(h.substring(0, 2), 16);
@@ -143,7 +250,78 @@
     return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
 
+  // Wide card view. All styling lives in CSS gated on html.tfbf-wide, so
+  // toggling off is just removing that class. Elements are tagged with
+  // data-tfbf-* attributes (React leaves unknown attributes alone).
+  function applyWideCard() {
+    const on = loadPrefs().wideCard;
+    document.documentElement.classList.toggle('tfbf-wide', on);
+    if (!on) return;
+
+    const tagged = ['[data-tfbf-shell]', '[data-tfbf-split]',
+      '[data-tfbf-col="main"]', '[data-tfbf-col="comments"]']
+      .every((sel) => document.querySelector(sel));
+    if (tagged) return; // already laid out; nothing re-rendered
+
+    const dlg = getCardDialog();
+    if (!dlg) return;
+    const cols = findCardColumns(dlg);
+    if (!cols) return;
+    const { split, main, comments } = cols;
+
+    // Shell = outermost ancestor still narrower than the viewport (the
+    // visible card box); its parent is the full-screen overlay.
+    const vw = document.documentElement.clientWidth;
+    let shell = split;
+    while (shell.parentElement && shell.parentElement !== document.body &&
+           shell.parentElement.getBoundingClientRect().width < vw - 40) {
+      shell = shell.parentElement;
+    }
+
+    // Pin the main column at its natural width (measured before widening)
+    if (!shell.dataset.tfbfMainW) {
+      shell.dataset.tfbfMainW = String(Math.round(main.getBoundingClientRect().width));
+    }
+    shell.style.setProperty('--tfbf-main-w', shell.dataset.tfbfMainW + 'px');
+    shell.setAttribute('data-tfbf-shell', '');
+
+    // Anything between shell and columns that doesn't fill its parent
+    // (max-width caps etc.) gets stretched, top-down.
+    const chain = [];
+    for (let el = split; el && el !== shell; el = el.parentElement) chain.unshift(el);
+    chain.forEach((el) => {
+      const parent = el.parentElement;
+      const cs = getComputedStyle(parent);
+      const inner = parent.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const hasSideSibling = Array.from(parent.children).some((sib) => {
+        if (sib === el) return false;
+        const a = sib.getBoundingClientRect(), b = el.getBoundingClientRect();
+        return a.width > 0 && a.bottom > b.top && a.top < b.bottom;
+      });
+      if (!hasSideSibling && el.getBoundingClientRect().width < inner - 4) {
+        el.setAttribute('data-tfbf-fill', '');
+      }
+    });
+
+    const gridCols = getComputedStyle(split).gridTemplateColumns;
+    split.setAttribute('data-tfbf-split',
+      getComputedStyle(split).display.includes('grid') && gridCols.split(' ').length === 2
+        ? 'grid' : 'flex');
+    main.setAttribute('data-tfbf-col', 'main');
+    comments.setAttribute('data-tfbf-col', 'comments');
+
+    // If the card was positioned with a fixed left offset, widening can
+    // push it off-screen — recenter in that case only.
+    const r = shell.getBoundingClientRect();
+    if (r.left < 0 || r.right > vw + 1) {
+      const pos = getComputedStyle(shell).position;
+      shell.setAttribute('data-tfbf-recenter',
+        pos === 'absolute' || pos === 'fixed' ? 'pos' : 'margin');
+    }
+  }
+
   function applyAll() {
+    applyWideCard();
     const boardId = getBoardId();
     if (!boardId) { updateFabBadge(0); return; }
     const state = loadState(boardId);
@@ -302,6 +480,38 @@
     }
     .tfbf-foot button.tfbf-save:hover { background: #F5BC2F; }
     .tfbf-empty { padding: 16px 14px; color: #8A8C94; }
+    .tfbf-section {
+      padding: 10px 14px 4px; color: #8A8C94; font-size: 10px;
+      font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    }
+    .tfbf-opt { border-bottom: 1px solid #2C2D33; padding-bottom: 10px; }
+    .tfbf-opt .tfbf-name small { display: block; color: #8A8C94; font-size: 11px; }
+
+    /* Wide card view — gated on html.tfbf-wide */
+    html.tfbf-wide [data-tfbf-shell] {
+      width: min(calc(100vw - ${WIDE_CARD_GUTTER}px), ${WIDE_CARD_MAX}px) !important;
+      max-width: none !important;
+    }
+    html.tfbf-wide [data-tfbf-recenter="margin"] {
+      margin-left: auto !important; margin-right: auto !important;
+    }
+    html.tfbf-wide [data-tfbf-recenter="pos"] {
+      left: calc((100vw - min(calc(100vw - ${WIDE_CARD_GUTTER}px), ${WIDE_CARD_MAX}px)) / 2) !important;
+      right: auto !important; margin-left: 0 !important; margin-right: 0 !important;
+      transform: none !important;
+    }
+    html.tfbf-wide [data-tfbf-fill] { width: 100% !important; max-width: none !important; }
+    html.tfbf-wide [data-tfbf-split="grid"] {
+      grid-template-columns: var(--tfbf-main-w) minmax(0, 1fr) !important;
+    }
+    html.tfbf-wide [data-tfbf-col="main"] {
+      flex: 0 0 var(--tfbf-main-w) !important;
+      width: var(--tfbf-main-w) !important; max-width: var(--tfbf-main-w) !important;
+    }
+    html.tfbf-wide [data-tfbf-col="comments"] {
+      flex: 1 1 0 !important; width: auto !important;
+      max-width: none !important; min-width: 0 !important;
+    }
   `;
 
   let fab = null;
@@ -357,6 +567,37 @@
     head.className = 'tfbf-head';
     head.innerHTML = '<strong>TF Board Filter</strong><span>just your view</span>';
     panel.appendChild(head);
+
+    // Card view options (global, work on any board)
+    const cardSec = document.createElement('div');
+    cardSec.className = 'tfbf-section';
+    cardSec.textContent = 'Card view';
+    panel.appendChild(cardSec);
+
+    const prefs = loadPrefs();
+    const wideRow = document.createElement('div');
+    wideRow.className = 'tfbf-row tfbf-opt';
+    const wideSw = document.createElement('button');
+    wideSw.className = 'tfbf-eye' + (prefs.wideCard ? ' tfbf-on' : '');
+    wideSw.title = prefs.wideCard ? 'Turn off wide card view' : 'Turn on wide card view';
+    wideSw.addEventListener('click', () => {
+      const p = loadPrefs();
+      p.wideCard = !p.wideCard;
+      savePrefs(p);
+      applyWideCard();
+      renderPanel();
+    });
+    wideRow.appendChild(wideSw);
+    const wideLabel = document.createElement('span');
+    wideLabel.className = 'tfbf-name';
+    wideLabel.innerHTML = 'Wide card view<small>More room for comments and activity</small>';
+    wideRow.appendChild(wideLabel);
+    panel.appendChild(wideRow);
+
+    const colSec = document.createElement('div');
+    colSec.className = 'tfbf-section';
+    colSec.textContent = 'Columns';
+    panel.appendChild(colSec);
 
     if (!boardId) {
       const empty = document.createElement('div');

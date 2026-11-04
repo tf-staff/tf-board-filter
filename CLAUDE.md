@@ -15,6 +15,8 @@ board ("UC Davis Tech Foundry Daily Operations", 15+ lists):
 2. **Snooze** — hide a column for 4 hours; it returns automatically.
 3. **Column colors** — faint tint + outline per column, with team-wide
    defaults keyed to staff names.
+4. **Wide card view** — optional (panel → Card view) widening of the open
+   card back so "Comments and activity" gets the extra room.
 
 It exists because the Foundry is on **free Trello** (no native list
 collapsing) and Power-Ups run in sandboxed iframes that cannot touch the
@@ -25,7 +27,7 @@ file — it is a single injected script.
 
 ## Current state
 
-**v1.2.1** (Nov 2026). All features above are live and in daily use by
+**v1.3.0** (Nov 2026). All features above are live and in daily use by
 the team. Version history:
 
 - 1.0.0 — column hide/show panel, color tint/outline, per-board storage
@@ -36,6 +38,7 @@ the team. Version history:
 - 1.2.0 — Snooze (Zz) button, 4h timed hide with automatic return;
   "Show all" also wakes snoozes
 - 1.2.1 — DEFAULT_COLORS roster expanded (Hayley pink, Robert red)
+- 1.3.0 — Wide card view toggle (global per-user pref, default off)
 
 ## Architecture
 
@@ -45,7 +48,8 @@ the team. Version history:
   key `tfbf:<boardShortLink>` (shortLink parsed from `/b/<id>` in the URL).
   Schema: `{ hidden: [listName], colors: { listName: hex|null }, snoozed:
   { listName: epochMs } }`. `colors[name] = null` means "explicitly no
-  color" and overrides a team default.
+  color" and overrides a team default. Global (non-board) prefs live
+  under `tfbf:global`: `{ wideCard: bool }`.
 - **Lists are keyed by NAME, not list ID.** Renaming a list resets its
   prefs — accepted tradeoff on an ops board with stable names.
 - **DOM anchors** (the most likely breakage point when Trello ships UI
@@ -54,6 +58,18 @@ the team. Version history:
   `.list-header-name`, `.list`). All DOM access funnels through three
   helpers: `getListWrappers()`, `getListName()`, `getListInner()` — fix
   selector breakage there and nowhere else.
+- **Card back anchors** (wide card view): `getCardDialog()` finds the
+  dialog via `[data-testid="card-back-name"]`-style anchors, else the
+  largest `[role="dialog"]` on a `/c/` URL. `findCardColumns()` finds the
+  two-column split by the "Comments and activity" heading text, else by
+  geometry (two tall side-by-side children). Fix card-back breakage
+  there. `applyWideCard()` tags elements with `data-tfbf-shell / -fill /
+  -split / -col` attributes (React leaves these alone) and all styling
+  is CSS gated on `html.tfbf-wide`, so toggling off = removing the
+  class. Main column is pinned at its natural width (`--tfbf-main-w`);
+  comments column takes the rest. Knobs: `WIDE_CARD_MAX` (1800),
+  `WIDE_CARD_GUTTER` (48). Note: on `/c/` card URLs `getBoardId()` is
+  null, so the column section of the panel shows "Open a board".
 - **Coloring technique**: `background-image: linear-gradient(tint, tint)`
   layers the tint OVER the list's own dark background without replacing
   it; ring is an inset `box-shadow`. Tuning knobs at top of file:
@@ -66,7 +82,8 @@ the team. Version history:
   poll for SPA board switches (Trello doesn't reload between boards).
 - **Panel**: floating `#tfbf-fab` pill bottom-right with "N hidden" badge
   (counts hidden + snoozed); dark panel with per-list rows [eye toggle |
-  name (+ "back h:mm" when snoozed) | Zz | color dot → swatch strip].
+  name (+ "back h:mm" when snoozed) | Zz | color dot → swatch strip],
+  preceded by a "Card view" section (Wide card view switch).
   Changes apply live; panel closes only via **Save & close** (or the
   fab). Do not reintroduce click-outside closing.
 - **Team color defaults**: `DEFAULT_COLORS` at top of file, keyed by
