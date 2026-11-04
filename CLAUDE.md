@@ -87,6 +87,16 @@ the team. Version history:
   userscript updates. Also update the changelog comment block below the
   header.
 
+## Release workflow (standing instructions from Steven)
+
+- When development + testing of a change is complete, **merge to `main`
+  immediately and push** (this deploys). No PR, no asking first.
+- After each merged change, give Steven **paste-ready release notes for
+  staff** in chat: plain language, short, user-facing (what's new / what
+  changed / how to update — TM auto-updates within ~24h, or Dashboard →
+  Utilities → Check for userscript updates). No file, no email — he
+  posts them himself.
+
 ## Environment / users
 
 - ~5–7 staff, all on **Microsoft Edge** (Chromium), machines **managed by
