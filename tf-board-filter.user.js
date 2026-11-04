@@ -1,20 +1,23 @@
 // ==UserScript==
 // @name         TF Board Filter
 // @namespace    https://tf-staff.github.io/
-// @version      1.3.0
+// @version      1.3.1
 // @description  Tech Foundry: per-user column hiding, column colors, and wide card view for Trello boards
 // @author       Tech Foundry
 // @match        https://trello.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @run-at       document-idle
+// @run-at       document-start
 // @updateURL    https://tf-staff.github.io/tf-board-filter/tf-board-filter.user.js
 // @downloadURL  https://tf-staff.github.io/tf-board-filter/tf-board-filter.user.js
 // ==/UserScript==
 
 /*
- * TF BOARD FILTER v1.3.0
+ * TF BOARD FILTER v1.3.1
  * Changelog:
+ *   1.3.1 — TF-Filter button now works while a card is open (it used to
+ *           close the card). Button renamed "TF-Filter"; panel header
+ *           shows "TF Filter, Version x.y.z".
  *   1.3.0 — "Wide card view" toggle (Columns panel → Card view). Widens
  *           the open card to nearly full screen; the description side
  *           keeps its width and Comments and activity gets the extra
@@ -376,7 +379,7 @@
 
   const CSS = `
     #tfbf-fab {
-      position: fixed; bottom: 18px; right: 18px; z-index: 9999;
+      position: fixed; bottom: 18px; right: 18px; z-index: 2147483000;
       display: flex; align-items: center; gap: 8px;
       background: #1E1F24; color: #E8E9ED;
       border: 1px solid #3A3B42; border-radius: 999px;
@@ -391,7 +394,7 @@
       padding: 2px 7px; font-size: 11px; font-weight: 700;
     }
     #tfbf-panel {
-      position: fixed; bottom: 66px; right: 18px; z-index: 9999;
+      position: fixed; bottom: 66px; right: 18px; z-index: 2147483000;
       width: 320px; max-height: 70vh; overflow-y: auto;
       background: #1E1F24; color: #E8E9ED;
       border: 1px solid #3A3B42; border-radius: 12px;
@@ -406,7 +409,6 @@
       position: sticky; top: 0; background: #1E1F24; border-radius: 12px 12px 0 0;
     }
     .tfbf-head strong { font-size: 13px; letter-spacing: .02em; }
-    .tfbf-head span { color: #8A8C94; font-size: 11px; }
     .tfbf-row {
       display: flex; align-items: center; gap: 10px;
       padding: 8px 14px; border-bottom: 1px solid #26272C;
@@ -514,8 +516,37 @@
     }
   `;
 
+  const SCRIPT_VERSION =
+    (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?';
+
   let fab = null;
   let panel = null;
+
+  // Click handling for our UI. Trello closes an open card on any
+  // pointer/click outside it, so we swallow those events for our fab and
+  // panel in the window CAPTURE phase (registered at document-start, so
+  // ahead of Trello's listeners) and dispatch our handlers ourselves.
+  function onClick(el, fn) { el._tfbfClick = fn; }
+
+  function isOurUi(target) {
+    return target instanceof Element && !!target.closest('#tfbf-fab, #tfbf-panel');
+  }
+
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'touchstart', 'touchend', 'click']
+    .forEach((type) => {
+      window.addEventListener(type, (e) => {
+        if (!isOurUi(e.target)) return;
+        e.stopImmediatePropagation();
+        // Keep focus where it is (inside the card) — focus moving out of
+        // the card dialog can also close it.
+        if (type === 'mousedown' || type === 'pointerdown') e.preventDefault();
+        if (type === 'click') {
+          let el = e.target;
+          while (el && !el._tfbfClick && el !== document.documentElement) el = el.parentElement;
+          if (el && el._tfbfClick) el._tfbfClick(e);
+        }
+      }, true);
+    });
   const openStrips = new Set(); // list names with expanded color palettes
 
   function injectStyles() {
@@ -541,8 +572,8 @@
     if (document.getElementById('tfbf-fab')) return;
     fab = document.createElement('button');
     fab.id = 'tfbf-fab';
-    fab.innerHTML = '<span>Columns</span><span class="tfbf-badge" style="display:none"></span>';
-    fab.addEventListener('click', () => {
+    fab.innerHTML = '<span>TF-Filter</span><span class="tfbf-badge" style="display:none"></span>';
+    onClick(fab, () => {
       if (panel.classList.contains('tfbf-open')) {
         panel.classList.remove('tfbf-open');
       } else {
@@ -565,7 +596,9 @@
 
     const head = document.createElement('div');
     head.className = 'tfbf-head';
-    head.innerHTML = '<strong>TF Board Filter</strong><span>just your view</span>';
+    const strong = document.createElement('strong');
+    strong.textContent = 'TF Filter, Version ' + SCRIPT_VERSION;
+    head.appendChild(strong);
     panel.appendChild(head);
 
     // Card view options (global, work on any board)
@@ -580,7 +613,7 @@
     const wideSw = document.createElement('button');
     wideSw.className = 'tfbf-eye' + (prefs.wideCard ? ' tfbf-on' : '');
     wideSw.title = prefs.wideCard ? 'Turn off wide card view' : 'Turn on wide card view';
-    wideSw.addEventListener('click', () => {
+    onClick(wideSw, () => {
       const p = loadPrefs();
       p.wideCard = !p.wideCard;
       savePrefs(p);
@@ -636,7 +669,7 @@
       const eye = document.createElement('button');
       eye.className = 'tfbf-eye' + (isHidden ? '' : ' tfbf-on');
       eye.title = isHidden ? 'Show this column' : 'Hide this column';
-      eye.addEventListener('click', () => {
+      onClick(eye, () => {
         const s = loadState(boardId);
         const idx = s.hidden.indexOf(name);
         if (idx >= 0) s.hidden.splice(idx, 1);
@@ -666,7 +699,7 @@
       snooze.title = isSnoozed
         ? 'Snoozed until ' + fmtTime(snoozeUntil) + ' — click to wake now'
         : 'Snooze: hide this column for 4 hours';
-      snooze.addEventListener('click', () => {
+      onClick(snooze, () => {
         const s = loadState(boardId);
         if (s.snoozed[name] && s.snoozed[name] > Date.now()) {
           delete s.snoozed[name]; // wake now
@@ -698,7 +731,7 @@
         sw.className = 'tfbf-swatch';
         sw.style.background = p.hex;
         sw.title = p.label;
-        sw.addEventListener('click', () => {
+        onClick(sw, () => {
           const s = loadState(boardId);
           s.colors[name] = p.hex;
           saveState(boardId, s);
@@ -711,7 +744,7 @@
       const none = document.createElement('button');
       none.className = 'tfbf-swatch tfbf-none';
       none.title = 'No color';
-      none.addEventListener('click', () => {
+      onClick(none, () => {
         const s = loadState(boardId);
         s.colors[name] = null; // explicit "no color" beats team default
         saveState(boardId, s);
@@ -720,7 +753,7 @@
       });
       strip.appendChild(none);
 
-      dot.addEventListener('click', () => {
+      onClick(dot, () => {
         if (openStrips.has(name)) openStrips.delete(name);
         else openStrips.add(name);
         strip.classList.toggle('tfbf-open');
@@ -734,7 +767,7 @@
 
     const showAll = document.createElement('button');
     showAll.textContent = 'Show all';
-    showAll.addEventListener('click', () => {
+    onClick(showAll, () => {
       const s = loadState(boardId);
       s.hidden = [];
       s.snoozed = {};
@@ -747,7 +780,7 @@
     const resetColors = document.createElement('button');
     resetColors.textContent = 'Reset colors';
     resetColors.title = 'Clear local color choices (team defaults return)';
-    resetColors.addEventListener('click', () => {
+    onClick(resetColors, () => {
       const s = loadState(boardId);
       s.colors = {};
       saveState(boardId, s);
@@ -759,7 +792,7 @@
     const saveClose = document.createElement('button');
     saveClose.className = 'tfbf-save';
     saveClose.textContent = 'Save & close';
-    saveClose.addEventListener('click', () => {
+    onClick(saveClose, () => {
       openStrips.clear();
       panel.classList.remove('tfbf-open');
     });

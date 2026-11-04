@@ -27,7 +27,7 @@ file — it is a single injected script.
 
 ## Current state
 
-**v1.3.0** (Nov 2026). All features above are live and in daily use by
+**v1.3.1** (Nov 2026). All features above are live and in daily use by
 the team. Version history:
 
 - 1.0.0 — column hide/show panel, color tint/outline, per-board storage
@@ -39,6 +39,8 @@ the team. Version history:
   "Show all" also wakes snoozes
 - 1.2.1 — DEFAULT_COLORS roster expanded (Hayley pink, Robert red)
 - 1.3.0 — Wide card view toggle (global per-user pref, default off)
+- 1.3.1 — fab/panel usable while a card is open (no longer closes the
+  card); fab renamed "TF-Filter"; header "TF Filter, Version x.y.z"
 
 ## Architecture
 
@@ -80,7 +82,15 @@ the team. Version history:
   style writes) with 250ms debounce; a 60s `setInterval(applyAll)` sweep
   so expired snoozes return on an idle board; an 800ms `location.href`
   poll for SPA board switches (Trello doesn't reload between boards).
-- **Panel**: floating `#tfbf-fab` pill bottom-right with "N hidden" badge
+- **Click isolation**: Trello closes an open card on any pointer/click
+  outside it. `@run-at document-start` registers window-CAPTURE
+  listeners (pointer/mouse/touch/click) that `stopImmediatePropagation`
+  for events inside `#tfbf-fab`/`#tfbf-panel` (and preventDefault on
+  down events to keep focus in the card). Because of that, our own
+  click handlers are NOT addEventListener — register them with
+  `onClick(el, fn)`, which the capture listener dispatches. Header
+  version comes from `GM_info.script.version` (no grant needed).
+- **Panel**: floating `#tfbf-fab` pill ("TF-Filter") bottom-right with "N hidden" badge
   (counts hidden + snoozed); dark panel with per-list rows [eye toggle |
   name (+ "back h:mm" when snoozed) | Zz | color dot → swatch strip],
   preceded by a "Card view" section (Wide card view switch).
